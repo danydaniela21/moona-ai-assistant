@@ -1,0 +1,37 @@
+# Entorno y cachés de Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Configuración local y credenciales de Streamlit
+.streamlit/secrets.toml
+.streamlit/credentials.json
+.streamlit/token.json
+.streamlit/oauth_pending.json
+.streamlit/user_preferences.json
+
+# Credenciales y tokens OAuth de Google
+.secrets/
+client_secret*.json
+credentials*.json
+token*.json
+
+# Base de datos local de tareas
+.data/
+# Documentos académicos y sus metadatos locales
+.data/academic_documents/
+*.db
+*.db-shm
+*.db-wal
+
+# Variables de entorno y archivos del editor
+.env
+.env.*
+.vscode/
+.idea/
+
+*.pem
+*.key
+*.p12
+*.pfx

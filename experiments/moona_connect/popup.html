@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>MOONA Connect</title>
+    <link rel="stylesheet" href="popup.css">
+    <script type="module" src="popup.mjs"></script>
+  </head>
+  <body>
+    <header>
+      <h1>MOONA Connect</h1>
+      <button id="refresh" type="button"></button>
+    </header>
+    <p id="connection" role="status"></p>
+    <section class="monitoring">
+      <label>
+        <input id="monitoring" type="checkbox" aria-describedby="monitoring-help" disabled>
+        <span id="monitoring-label"></span>
+      </label>
+      <p id="monitoring-help"></p>
+      <p id="monitoring-error" role="status" hidden></p>
+    </section>
+    <ul id="platforms"></ul>
+    <template id="platform-row">
+      <li>
+        <div>
+          <strong></strong>
+          <p role="status"></p>
+        </div>
+        <button type="button" hidden></button>
+      </li>
+    </template>
+  </body>
+</html>

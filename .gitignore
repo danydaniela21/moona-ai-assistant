@@ -5,17 +5,18 @@ __pycache__/
 venv/
 
 # Configuración local y credenciales de Streamlit
-.streamlit/secrets.toml
-.streamlit/credentials.json
-.streamlit/token.json
-.streamlit/oauth_pending.json
-.streamlit/user_preferences.json
+/.streamlit/*
+!/.streamlit/config.toml
+!/.streamlit/secrets.toml.example
 
 # Credenciales y tokens OAuth de Google
 .secrets/
 client_secret*.json
 credentials*.json
 token*.json
+oauth_pending*.json
+user_preferences*.json
+secrets.toml
 
 # Base de datos local de tareas
 .data/
@@ -23,6 +24,11 @@ token*.json
 .data/academic_documents/
 *.db
 *.db-shm
+
+# MOONA Connect: compilación y archivos locales
+/.moona-connect-build/
+**/com.moona.connect.json
+**/indicators.db-journal
 *.db-wal
 
 # Variables de entorno y archivos del editor

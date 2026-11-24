@@ -7,16 +7,19 @@ ni se muestra ningún secreto, código de autorización o token.
 
 from __future__ import annotations
 
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 import hmac
 import json
 from pathlib import Path
+from tempfile import NamedTemporaryFile
+from threading import Lock
 import time
 from typing import Any
 
-from google.auth.exceptions import RefreshError
+from google.auth.exceptions import RefreshError, TransportError
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
@@ -30,10 +33,16 @@ SCOPES = (
     "https://www.googleapis.com/auth/calendar.readonly",
 )
 OAUTH_TTL_SECONDS = 600
+_TOKEN_LOCK = Lock()
+MENSAJE_RECONEXION = "No se pudo renovar la sesión de Google. Vuelve a conectar tu cuenta."
 
 
 class GoogleServiceError(Exception):
     """Error controlado de OAuth, permisos o comunicación con Google."""
+
+
+class GoogleAuthenticationError(GoogleServiceError):
+    """La sesión requiere una nueva autorización."""
 
 
 @dataclass(frozen=True)
@@ -51,18 +60,24 @@ class GoogleOAuthManager:
 
     def __init__(self, config: GoogleConfig) -> None:
         self.config = config
+        self._credenciales: Credentials | None = None
+        self.error_autenticacion: GoogleAuthenticationError | None = None
 
     @property
     def conectado(self) -> bool:
-        return self.config.token_file.is_file()
+        if not self.config.token_file.is_file():
+            return False
+        try:
+            self.credenciales()
+        except GoogleAuthenticationError:
+            return False
+        return True
 
     def iniciar(self) -> str:
         """Crea una URL OAuth con state aleatorio y desafío PKCE S256."""
 
         if not self.config.credentials_file.is_file():
-            raise GoogleServiceError(
-                f"No se encontró el archivo OAuth en {self.config.credentials_file}."
-            )
+            raise GoogleServiceError("No se encontró el archivo de credenciales OAuth de Google.")
         try:
             pendiente = self._leer_pendiente()
             if pendiente and time.time() - float(pendiente.get("created_at", 0)) <= OAUTH_TTL_SECONDS:
@@ -109,7 +124,9 @@ class GoogleOAuthManager:
         if not pendiente or not state_recibido:
             raise GoogleServiceError("La transacción OAuth no existe o ya fue utilizada.")
         state_esperado = str(pendiente.get("state", ""))
-        if not hmac.compare_digest(state_recibido, state_esperado):
+        if not state_recibido.isascii() or not state_esperado.isascii() or not hmac.compare_digest(
+            state_recibido, state_esperado
+        ):
             raise GoogleServiceError("La validación de seguridad OAuth falló (state no coincide).")
         if time.time() - float(pendiente.get("created_at", 0)) > OAUTH_TTL_SECONDS:
             self._eliminar_pendiente()
@@ -131,7 +148,12 @@ class GoogleOAuthManager:
             credenciales = flow.credentials
             if not credenciales.has_scopes(list(SCOPES)):
                 raise GoogleServiceError("No se concedieron todos los permisos de lectura requeridos.")
-            self._guardar_token(credenciales)
+            if not credenciales.refresh_token or not credenciales.valid:
+                raise GoogleAuthenticationError(MENSAJE_RECONEXION)
+            with _TOKEN_LOCK:
+                self._guardar_token(credenciales)
+                self._credenciales = credenciales
+                self.error_autenticacion = None
         except GoogleServiceError:
             raise
         except Exception as exc:
@@ -142,40 +164,76 @@ class GoogleOAuthManager:
     def credenciales(self) -> Credentials:
         """Carga y renueva el token local sin ampliar sus permisos."""
 
-        if not self.config.token_file.is_file():
-            raise GoogleServiceError("Conecta tu cuenta personal de Google para continuar.")
-        try:
-            credenciales = Credentials.from_authorized_user_file(
-                str(self.config.token_file), scopes=list(SCOPES)
-            )
-            if credenciales.expired and credenciales.refresh_token:
-                credenciales.refresh(Request())
-                self._guardar_token(credenciales)
-        except (OSError, ValueError, RefreshError) as exc:
-            raise GoogleServiceError(
-                "El token de Google no es válido o expiró. Desconecta la cuenta y autoriza nuevamente."
-            ) from exc
-        if not credenciales.valid:
-            raise GoogleServiceError("La sesión de Google no es válida. Autoriza nuevamente.")
-        return credenciales
+        if self.error_autenticacion is not None:
+            raise self.error_autenticacion
+        with _TOKEN_LOCK:
+            if not self.config.token_file.is_file():
+                raise GoogleAuthenticationError("Conecta tu cuenta personal de Google para continuar.")
+            try:
+                credenciales = self._credenciales
+                if credenciales is None or not credenciales.valid:
+                    credenciales = Credentials.from_authorized_user_file(
+                        str(self.config.token_file), scopes=list(SCOPES)
+                    )
+                if not credenciales.refresh_token:
+                    raise GoogleAuthenticationError(MENSAJE_RECONEXION)
+                if not credenciales.valid:
+                    credenciales.refresh(Request())
+                    if not credenciales.valid:
+                        raise GoogleAuthenticationError(MENSAJE_RECONEXION)
+                    self._guardar_token(credenciales)
+            except (OSError, ValueError, TypeError, AttributeError,
+                    RefreshError, TransportError, GoogleServiceError) as exc:
+                self.error_autenticacion = GoogleAuthenticationError(MENSAJE_RECONEXION)
+                raise self.error_autenticacion from exc
+            self._credenciales = credenciales
+            return credenciales
 
     def desconectar(self) -> None:
         """Elimina el token local; no revoca permisos en la cuenta de Google."""
 
         try:
-            self.config.token_file.unlink(missing_ok=True)
-            self.config.pending_file.unlink(missing_ok=True)
+            with _TOKEN_LOCK:
+                self.config.token_file.unlink(missing_ok=True)
+                self.config.pending_file.unlink(missing_ok=True)
+                self._credenciales = None
+                self.error_autenticacion = None
         except OSError as exc:
             raise GoogleServiceError("No fue posible eliminar el token local.") from exc
 
     def _guardar_token(self, credenciales: Credentials) -> None:
-        """Persiste el token fuera del repositorio con acceso restringido al usuario."""
+        """Reemplaza atómicamente el token en el directorio local excluido de Git."""
 
+        temporal: Path | None = None
         try:
             self.config.token_file.parent.mkdir(parents=True, exist_ok=True)
-            self.config.token_file.write_text(credenciales.to_json(), encoding="utf-8")
+            with NamedTemporaryFile(
+                mode="w", encoding="utf-8", dir=self.config.token_file.parent,
+                prefix=f"{self.config.token_file.name}.", suffix=".tmp", delete=False,
+            ) as archivo:
+                temporal = Path(archivo.name)
+                archivo.write(credenciales.to_json())
+            temporal.replace(self.config.token_file)
         except OSError as exc:
             raise GoogleServiceError("No fue posible guardar el token OAuth local.") from exc
+        finally:
+            if temporal is not None:
+                with suppress(OSError):
+                    temporal.unlink(missing_ok=True)
+
+    def guardar_renovacion(self, credenciales: Credentials, token_anterior: str | None) -> None:
+        """Persiste una renovación hecha por el transporte, sin pisar otra sesión."""
+        with _TOKEN_LOCK:
+            if not self.config.token_file.is_file():
+                return
+            try:
+                guardadas = Credentials.from_authorized_user_file(
+                    str(self.config.token_file), scopes=list(SCOPES)
+                )
+            except (OSError, ValueError, TypeError, AttributeError):
+                return
+            if guardadas.token == token_anterior:
+                self._guardar_token(credenciales)
 
     def _leer_pendiente(self) -> dict[str, Any] | None:
         """Lee la transacción temporal sin exponer su contenido."""
@@ -183,9 +241,14 @@ class GoogleOAuthManager:
         if not self.config.pending_file.is_file():
             return None
         try:
-            return json.loads(self.config.pending_file.read_text(encoding="utf-8"))
+            pendiente = json.loads(self.config.pending_file.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return None
+        if not isinstance(pendiente, dict) or type(pendiente.get("created_at")) not in (int, float):
+            return None
+        if any(not isinstance(pendiente.get(campo), str) for campo in ("state", "code_verifier", "authorization_url")):
+            return None
+        return pendiente
 
     def _guardar_pendiente(self, pendiente: dict[str, Any]) -> None:
         """Persiste state y verifier fuera de Git durante un máximo de diez minutos."""
@@ -213,6 +276,21 @@ class GoogleWorkspaceService:
     def conectado(self) -> bool:
         return self.oauth.conectado
 
+    @property
+    def error_autenticacion(self) -> GoogleAuthenticationError | None:
+        return self.oauth.error_autenticacion
+
+    @property
+    def revision_token(self) -> int:
+        """Identifica la versión del archivo sin compartir el token entre sesiones."""
+        try:
+            return self.oauth.config.token_file.stat().st_mtime_ns
+        except OSError:
+            return -1
+
+    def marcar_reconexion(self) -> None:
+        self.oauth.error_autenticacion = GoogleAuthenticationError(MENSAJE_RECONEXION)
+
     def iniciar_autenticacion(self) -> str:
         return self.oauth.iniciar()
 
@@ -228,19 +306,27 @@ class GoogleWorkspaceService:
         except (HttpError, OSError) as exc:
             raise GoogleServiceError("No fue posible iniciar la conexión con Google.") from exc
 
-    @staticmethod
-    def _ejecutar(solicitud: Any) -> dict[str, Any]:
+    def _ejecutar(self, solicitud: Any) -> dict[str, Any]:
+        credenciales = self.oauth.credenciales()
+        token_anterior = credenciales.token
         try:
-            return solicitud.execute()
+            resultado = solicitud.execute()
+            if credenciales.valid and credenciales.token != token_anterior:
+                self.oauth.guardar_renovacion(credenciales, token_anterior)
+            return resultado
+        except RefreshError as exc:
+            raise GoogleAuthenticationError(MENSAJE_RECONEXION) from exc
         except HttpError as exc:
             codigo = getattr(exc.resp, "status", None)
-            if codigo in (401, 403):
+            if codigo == 401:
+                raise GoogleAuthenticationError(MENSAJE_RECONEXION) from exc
+            if codigo == 403:
                 raise GoogleServiceError(
                     "Google rechazó el acceso. Verifica que Gmail API y Google Calendar API estén "
                     "habilitadas y que los permisos de solo lectura estén autorizados."
                 ) from exc
-            raise GoogleServiceError(f"Google devolvió un error al consultar los datos ({codigo or 'desconocido'}).") from exc
-        except OSError as exc:
+            raise GoogleServiceError("Google devolvió un error al consultar los datos.") from exc
+        except (OSError, TransportError) as exc:
             raise GoogleServiceError("No fue posible comunicarse con Google.") from exc
 
     def perfil(self) -> dict[str, Any]:

@@ -1,0 +1,19 @@
+{
+  "description": {"message": "Read indicators from authorized tab titles locally."},
+  "refresh": {"message": "Refresh"},
+  "platformList": {"message": "Tab title indicators"},
+  "authorize": {"message": "Authorize"},
+  "authorizePlatform": {"message": "Authorize $PLATFORM$", "placeholders": {"platform": {"content": "$1"}}},
+  "unauthorized": {"message": "Permission needed"},
+  "no_tab": {"message": "No detectable tab"},
+  "unknown": {"message": "Unknown indicator"},
+  "unavailable": {"message": "Read unavailable"},
+  "inTitle": {"message": "$VALUE$ in the title", "placeholders": {"value": {"content": "$1"}}},
+  "connected": {"message": "MOONA connected"},
+  "disconnected": {"message": "MOONA disconnected"},
+  "permissionError": {"message": "Permission request failed"},
+  "refreshError": {"message": "Refresh unavailable"},
+  "automaticMonitoring": {"message": "Automatic monitoring"},
+  "automaticMonitoringHelp": {"message": "Opens missing authorized sites in background tabs. Turning this off leaves any open tabs in place."},
+  "automaticMonitoringError": {"message": "Could not complete the monitoring change."}
+}

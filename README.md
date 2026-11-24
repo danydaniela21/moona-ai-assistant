@@ -1,7 +1,7 @@
 # MOONA — Intelligent Personal Assistant
 
 ![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)
-![Streamlit](https://img.shields.io/badge/Streamlit-1.32%2B-FF4B4B?logo=streamlit&logoColor=white)
+![Streamlit](https://img.shields.io/badge/Streamlit-1.37%2B-FF4B4B?logo=streamlit&logoColor=white)
 ![SQLite](https://img.shields.io/badge/SQLite-Local-003B57?logo=sqlite&logoColor=white)
 ![Google APIs](https://img.shields.io/badge/Google-Gmail%20%7C%20Calendar-4285F4?logo=google&logoColor=white)
 ![Groq](https://img.shields.io/badge/AI-Groq%20%7C%20Gemini-FF1493)
@@ -11,7 +11,7 @@ MOONA is a bilingual personal AI assistant built with Python and Streamlit. It c
 
 The project was originally developed as an academic project for **Universidad Central de Chile**, within the **Ingeniería en Informática y Sistemas Inteligentes** program, and has evolved into a software engineering portfolio project.
 
-> MOONA runs locally. It is not published or hosted by this repository.
+> This repository distributes the source code. MOONA runs locally on your computer.
 
 ## Main Features
 
@@ -22,14 +22,17 @@ The project was originally developed as an academic project for **Universidad Ce
 - **Neural text-to-speech:** Edge TTS uses `en-US-AriaNeural` for English and `es-CL-CatalinaNeural` for Spanish, with the browser Web Speech API as a fallback.
 - **Gmail integration:** Connect a Google account and search real messages using Gmail search syntax.
 - **Google Calendar integration:** Read upcoming events from the connected calendar.
+- **Google session recovery:** MOONA renews expired access tokens using the local refresh token. If Google rejects the session, MOONA shows one localized error and offers reconnection.
 - **Task management:** Create, view, edit, complete, filter, and delete tasks stored in a local SQLite database.
 - **Academic documents:** Upload, extract, inspect, download, and delete `.docx` and `.xlsx` files stored locally.
 - **Local personalization:** The preferred user name and language are retained locally.
 - **Responsive visual design:** Dark, futuristic Streamlit interface with a custom MOONA identity and responsive layout.
+- **Social Hub:** Four responsive shortcuts for Instagram, Facebook, WhatsApp Web, and LinkedIn. MOONA Connect 0.3 adds optional local indicators and background tab monitoring.
+- **Integrated chat composer:** The input sits below optional personal context and scrolls naturally as the conversation grows.
 
 ## Application Screenshots
 
-### Interface design
+### Original interface design reference
 
 ![MOONA interface](assets/moona_design.png)
 
@@ -50,6 +53,7 @@ The application uses the moon and cherry-blossom artwork in `assets/moona_backgr
 | AI fallback | Google Gen AI SDK (`google-genai`) |
 | Email and calendar | Gmail API, Google Calendar API |
 | Authentication | Google OAuth 2.0 Authorization Code flow, `state`, and PKCE |
+| Social Hub integration | Chrome Manifest V3, Native Messaging, and local SQLite |
 | Local persistence | SQLite via Python `sqlite3` |
 | Speech recognition | `SpeechRecognition` with Google Speech Recognition |
 | Neural speech synthesis | Edge TTS |
@@ -64,6 +68,9 @@ The application uses the moon and cherry-blossom artwork in `assets/moona_backgr
 flowchart TD
     User[User in web browser] --> UI[Streamlit UI<br/>app.py]
     UI --> I18N[i18n.py<br/>English / Spanish]
+    Connect[MOONA Connect<br/>Chrome extension] --> Native[Windows Native Messaging host]
+    Native --> Indicators[(Local indicator snapshot)]
+    Indicators --> UI
 
     UI --> Consent{Explicit context<br/>authorization}
     Consent -->|Authorized sources only| Context[Limited context assembly]
@@ -102,6 +109,13 @@ The Streamlit layer coordinates navigation and consent. Service modules remain s
 ├── app.py                         # Streamlit interface and application orchestration
 ├── ai_service.py                  # Groq primary provider and Gemini fallback
 ├── google_service.py              # Google OAuth, Gmail, and Calendar access
+├── social_hub.py                  # Bilingual cards and indicators
+├── moona_connect_state.py         # Local indicator format and storage
+├── experiments/
+│   ├── moona_connect/             # Chrome extension and JavaScript tests
+│   ├── moona_connect_host/        # Windows host, registration script, and tests
+│   └── windows_notification_probe.py
+├── tests/test_google_auth.py      # Google authentication and read-only API tests
 ├── database.py                    # SQLite task repository and CRUD operations
 ├── academic_documents.py          # DOCX/XLSX extraction and local persistence
 ├── voice_service.py               # In-memory speech recognition
@@ -119,7 +133,7 @@ The Streamlit layer coordinates navigation and consent. Service modules remain s
     └── moona_robot.png            # MOONA avatar and favicon source
 ```
 
-Runtime-only files are created under `.data/` and `.streamlit/`. They are excluded from version control.
+MOONA keeps application data and credentials under `.data/` and `.streamlit/`. Connect stores its indicator snapshot under `%LOCALAPPDATA%\MOONA\Connect\`. The generated Native Messaging build under `.moona-connect-build/` is excluded from version control.
 
 ## Installation
 
@@ -226,6 +240,46 @@ https://www.googleapis.com/auth/calendar.readonly
 ```
 
 The application does not request permission to send email, modify messages, or edit calendar events.
+
+Google may expire refresh tokens after seven days for external OAuth apps in **Testing** that request Gmail or Calendar scopes. If the refresh token is no longer usable, reconnect in MOONA to grant access again. [Google OAuth token expiration](https://developers.google.com/identity/protocols/oauth2#expiration)
+
+## MOONA Connect 0.3
+
+The optional extension reads indicators from Chrome tab titles for the four Social Hub platforms. Windows and Chrome 102 or later are required for the documented Native Messaging setup. The extension sends only platform, indicator, state, and update time to the local host.
+
+1. In Chrome, open `chrome://extensions`, enable **Developer mode**, and **Load unpacked** from `experiments/moona_connect/`. Copy the extension ID shown there.
+2. Build the Windows host from the repository root using the active Python environment:
+
+   ```powershell
+   python -m pip install PyInstaller
+   python -m PyInstaller --noconfirm --onedir --console --name moona-connect-host --paths . --distpath .moona-connect-build/dist --workpath .moona-connect-build/work --specpath .moona-connect-build experiments/moona_connect_host/native_host.py
+   ```
+
+3. Register the host for your Windows user with the copied ID. The script prompts before changing the registry:
+
+   ```powershell
+   .\experiments\moona_connect_host\manage_native_host.ps1 -Action Install -ExtensionId 'YOUR_EXTENSION_ID'
+   ```
+
+4. Run `python -m streamlit run app.py --server.address 127.0.0.1`. In the extension, grant access only to the sites you want to monitor and select **Refresh**. **Automatic monitoring** is off by default. Enable it explicitly to open missing authorized sites in background tabs.
+
+To uninstall, disable the extension and run the same script with `-Action Uninstall`. See the [MOONA Connect guide](experiments/moona_connect/README.md) for validation, troubleshooting, and removal.
+
+### Current limitations
+
+- The displayed number is a signal from the tab title. Its meaning and availability can vary by site, account, or language. An unknown indicator is shown without a number.
+- Chrome can suspend or discard background tabs. Session restoration can also race with tab creation on startup. Monitoring requires Chrome to be running.
+- The host uses one Windows-user snapshot. Use a single Chrome profile for the pilot. Social Hub links open in a new tab, and Outlook is outside this release.
+
+## Tests
+
+```powershell
+python -m unittest discover -s tests -v
+python -m unittest experiments.moona_connect_host.test_native_host -v
+node --test experiments/moona_connect/*.test.mjs
+```
+
+The Google tests use simulated API responses. The [MOONA Connect guide](experiments/moona_connect/README.md#validar-la-integración-manualmente) describes manual integration checks.
 
 ## Privacy and Security
 

@@ -1,0 +1,19 @@
+{
+  "description": {"message": "Consulta local de indicadores en títulos de pestañas autorizadas."},
+  "refresh": {"message": "Actualizar"},
+  "platformList": {"message": "Indicadores en títulos de pestañas"},
+  "authorize": {"message": "Autorizar"},
+  "authorizePlatform": {"message": "Autorizar $PLATFORM$", "placeholders": {"platform": {"content": "$1"}}},
+  "unauthorized": {"message": "Permiso pendiente"},
+  "no_tab": {"message": "Sin pestaña detectable"},
+  "unknown": {"message": "Indicador desconocido"},
+  "unavailable": {"message": "Consulta no disponible"},
+  "inTitle": {"message": "$VALUE$ en el título", "placeholders": {"value": {"content": "$1"}}},
+  "connected": {"message": "MOONA conectado"},
+  "disconnected": {"message": "MOONA sin conexión"},
+  "permissionError": {"message": "No se pudo solicitar el permiso"},
+  "refreshError": {"message": "Actualización no disponible"},
+  "automaticMonitoring": {"message": "Monitoreo automático"},
+  "automaticMonitoringHelp": {"message": "Abre los sitios autorizados que falten en pestañas de segundo plano. Si lo desactivas, las pestañas ya abiertas permanecen abiertas."},
+  "automaticMonitoringError": {"message": "No se pudo completar el cambio de monitoreo."}
+}

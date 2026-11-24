@@ -32,8 +32,10 @@ from database import (
     TaskDatabase,
 )
 from i18n import DEFAULT_LANGUAGE, LANGUAGE_LABELS, translate
+from social_hub import renderizar_social_hub
 
 from google_service import (
+    GoogleAuthenticationError,
     GoogleConfig,
     GoogleOAuthManager,
     GoogleServiceError,
@@ -128,7 +130,7 @@ def aplicar_estilos() -> None:
             background-image:
                 linear-gradient(90deg, rgba(8,5,9,.14), rgba(8,5,9,.08) 60%, rgba(8,5,9,.02)),
                 url("__MOONA_BACKGROUND__");
-            background-size:cover;
+            background-size:cover, max(95vw, 168.8vh) auto;
             background-position:center top;
             background-repeat:no-repeat;
             background-attachment:fixed;
@@ -303,8 +305,6 @@ def aplicar_estilos() -> None:
         [data-baseweb="radio"] [aria-checked="true"] {
             background-color:#FF1493 !important; border-color:#FF1493 !important;
         }
-        [data-testid="stChatInput"] textarea,
-        [data-testid="stChatInput"] > div,
         [data-testid="stNumberInput"] input,
         [data-testid="stTextArea"] textarea {
             background:rgba(8,5,15,.78) !important; border-color:var(--line) !important;
@@ -318,11 +318,49 @@ def aplicar_estilos() -> None:
             border-color:#FF1493 !important; box-shadow:0 0 0 1px #FF1493 !important;
         }
         [data-baseweb="tag"] { background:#30143F !important; color:#FCE7F3 !important; }
-        [data-testid="stChatInput"] { border:1px solid #FF1493 !important; border-radius:22px !important; overflow:hidden; }
+        [data-testid="stChatInput"] {
+            border:1px solid #FF1493 !important; border-radius:22px !important; overflow:hidden;
+            background:rgba(25,13,31,.72);
+        }
+        [data-testid="stChatInput"] > div,
+        [data-testid="stChatInput"] textarea {
+            background:transparent !important; color:#FCE7F3 !important;
+        }
         [data-testid="stChatInput"] button { border-radius:50% !important; color:#FCE7F3 !important; background:#FF1493 !important; }
         [data-testid="stExpander"] { border:1px solid rgba(255,20,147,.72) !important; border-radius:18px !important; background:rgba(8,5,9,.66) !important; }
         hr { border-color:rgba(255,105,180,.20) !important; }
+        .block-container:has(.moona-social-hub) {
+            max-width: 1440px;
+            padding: clamp(.65rem, 2vh, 1.2rem) clamp(1rem, 3.2vw, 3.5rem) .35rem;
+        }
+        .block-container:has(.moona-social-hub) > [data-testid="stVerticalBlock"] {
+            gap: clamp(.45rem, 1vh, .7rem);
+        }
+        .block-container:has(.moona-social-hub) .hero { padding: 0; }
+        .block-container:has(.moona-social-hub) .hero h1 { padding: 0; }
+        .block-container:has(.moona-social-hub) .status-row { margin-top: .4rem; }
+        .block-container:has(.moona-social-hub) .assistant-title { margin: 0; line-height: 1.15; }
+        .block-container:has(.moona-social-hub) .empty-state {
+            display: grid; grid-template-columns: auto minmax(0, 1fr);
+            column-gap: .65rem; align-items: start;
+            margin: 0; padding: clamp(.55rem, 1.2vh, 1rem) clamp(.75rem, 1.7vw, 1.4rem);
+        }
+        .block-container:has(.moona-social-hub) .empty-symbol { grid-row: span 2; margin: 0; }
+        .block-container:has(.moona-social-hub) .empty-state h3 {
+            margin: 0 0 .23rem; padding: 0; line-height: 1.2; font-size: clamp(1.15rem, 2vw, 1.55rem);
+        }
+        .block-container:has(.moona-social-hub) .empty-state p { margin: 0; }
+        @media (min-width: 769px) and (max-height: 760px) {
+            .block-container:has(.moona-social-hub) .hero h1 {
+                margin: .1rem 0 .2rem; font-size: clamp(2rem, 4vw, 2.7rem);
+            }
+            .block-container:has(.moona-social-hub) .hero p { line-height: 1.25; }
+            .block-container:has(.moona-social-hub) .status-row { margin-top: .3rem; }
+            .block-container:has(.moona-social-hub) .status-pill { padding-block: .24rem; }
+            .block-container:has(.moona-social-hub) .assistant-title { font-size: 2rem; }
+        }
         @media (max-width: 768px) {
+            .stApp { background-position: center top, calc(50% - 12vh) top; }
             .block-container { padding:1.2rem 1rem 2rem; }
             .hero { padding-top:.2rem; }
             .welcome-grid { grid-template-columns:1fr; text-align:center; }
@@ -492,6 +530,8 @@ def recopilar_contexto_personal(fuentes: list[str]) -> dict[str, object]:
     if "Gmail" in fuentes or "Calendario" in fuentes:
         google = obtener_servicio_google()
         if not google or not google.conectado:
+            if google and google.error_autenticacion:
+                raise google.error_autenticacion
             raise GoogleServiceError(
                 "Conecta tu cuenta de Google antes de compartir Gmail o Calendar con la IA."
             )
@@ -540,8 +580,10 @@ def enviar_consulta_ia(
             ]
         )
         st.rerun()
+    except GoogleAuthenticationError:
+        gestionar_error_autenticacion()
     except (AIServiceError, DatabaseError, GoogleServiceError, AcademicDocumentError) as exc:
-        st.error(str(exc))
+        st.error(tr(str(exc)) if isinstance(exc, GoogleServiceError) else str(exc))
 
 
 def generar_respuesta_ia(
@@ -584,20 +626,14 @@ def _selector_contexto(key: str, *, disabled: bool = False) -> list[str]:
 def _vista_chat(servicio: AIService | None) -> None:
     """Interfaz exclusivamente escrita, sin controles de audio."""
 
-    cabecera, limpiar = st.columns([4, 1])
-    cabecera.caption(tr("Conversación escrita · Groq principal · Gemini alternativo"))
-    if limpiar.button(tr("Limpiar chat"), use_container_width=True):
-        st.session_state["chat_messages"] = []
-        st.session_state.pop("consulta_pendiente", None)
-        st.rerun()
+    st.caption(tr("Conversación escrita · Groq principal · Gemini alternativo"))
 
     historial = st.session_state.setdefault("chat_messages", [])
     if not historial:
-        st.markdown(
+        st.html(
             f"""<div class="empty-state"><div class="empty-symbol">✦</div>
             <h3>{tr("¿En qué puedo ayudarte?")}</h3>
             <p>{tr("Escribe una consulta general, académica o profesional.")}</p></div>""",
-            unsafe_allow_html=True,
         )
     for entrada in historial:
         with st.chat_message(
@@ -624,7 +660,7 @@ def _vista_chat(servicio: AIService | None) -> None:
             st.session_state.pop("consulta_pendiente", None)
             st.rerun()
 
-    mensaje = st.chat_input(
+    mensaje = st.container().chat_input(
         tr("Escribe tu consulta para MOONA…"),
         disabled=bool(pendiente) or servicio is None,
     )
@@ -709,6 +745,8 @@ def _procesar_voz(
             st.session_state.get("voice_input_generation", 0) + 1
         )
         st.rerun()
+    except GoogleAuthenticationError:
+        gestionar_error_autenticacion()
     except (
         VoiceServiceError,
         AIServiceError,
@@ -717,7 +755,7 @@ def _procesar_voz(
         AcademicDocumentError,
     ) as exc:
         indicador.markdown(_orb_voz("listening"), unsafe_allow_html=True)
-        st.error(str(exc))
+        st.error(tr(str(exc)) if isinstance(exc, GoogleServiceError) else str(exc))
 
 
 def _vista_voz(servicio: AIService | None) -> None:
@@ -827,15 +865,13 @@ def _vista_voz(servicio: AIService | None) -> None:
 def vista_asistente() -> None:
     """Presenta modos independientes para chat escrito y conversación por voz."""
 
-    st.markdown(
-        f'<h1 class="assistant-title">{tr("Asistente personal")}</h1>',
-        unsafe_allow_html=True,
-    )
+    st.html(f'<h1 class="assistant-title">{tr("Asistente personal")}</h1>')
     nombre = str(st.session_state.get("nombre_usuario") or cargar_nombre_usuario())
     servicio = obtener_servicio_ia(nombre)
     if servicio is None:
         st.warning(tr("Configura una API Key de IA en `.streamlit/secrets.toml` para conversar."))
-    modo = st.segmented_control(
+    selector, acciones = st.columns([4, 1], vertical_alignment="bottom")
+    modo = selector.segmented_control(
         tr("Modo de interacción"),
         options=("Chat", "Asistente de voz"),
         format_func=tr,
@@ -846,6 +882,10 @@ def vista_asistente() -> None:
     if modo == "Asistente de voz":
         _vista_voz(servicio)
     else:
+        if acciones.button(tr("Limpiar chat"), use_container_width=True):
+            st.session_state["chat_messages"] = []
+            st.session_state.pop("consulta_pendiente", None)
+            st.rerun()
         _vista_chat(servicio)
 
 
@@ -860,42 +900,69 @@ def obtener_servicio_google() -> GoogleWorkspaceService | None:
     )
     if not config.credentials_file.is_file():
         return None
-    return GoogleWorkspaceService(GoogleOAuthManager(config))
+    servicio = GoogleWorkspaceService(GoogleOAuthManager(config))
+    revision_rechazada = st.session_state.get("google_requiere_reconexion")
+    if revision_rechazada is not None:
+        if revision_rechazada == servicio.revision_token:
+            servicio.marcar_reconexion()
+        else:
+            st.session_state.pop("google_requiere_reconexion", None)
+    return servicio
 
 
-def bloque_conexion(servicio: GoogleWorkspaceService | None) -> None:
+def gestionar_error_autenticacion(servicio: GoogleWorkspaceService | None = None) -> None:
+    servicio = servicio or obtener_servicio_google()
+    if servicio and st.session_state.get("google_requiere_reconexion") != servicio.revision_token:
+        st.session_state["google_requiere_reconexion"] = servicio.revision_token
+        st.rerun()
+    # Si la sesión ya se marcó, el bloque de conexión muestra el error y el enlace.
+
+
+def bloque_conexion(servicio: GoogleWorkspaceService | None, mostrar_error: bool = True) -> bool:
     """Muestra una conexión real o las instrucciones mínimas de configuración."""
 
     if servicio is None:
         st.warning(
             tr("No se encontró `.streamlit/credentials.json`. Coloca allí el JSON del cliente OAuth web.")
         )
-        return
+        return False
     if servicio.conectado:
         try:
             perfil = servicio.perfil()
-            correo = escape(str(perfil.get("emailAddress") or tr("Cuenta de Google")))
-            st.markdown(
-                f'<div class="account-box"><strong>{tr("Google conectado")}</strong><br><span class="data-meta">{correo}</span></div>',
-                unsafe_allow_html=True,
-            )
-        except GoogleServiceError as exc:
-            st.error(str(exc))
+        except GoogleAuthenticationError:
+            gestionar_error_autenticacion(servicio)
+            return False
+        except GoogleServiceError:
+            perfil = {}
+        correo = escape(str(perfil.get("emailAddress") or tr("Cuenta de Google")))
+        st.markdown(
+            f'<div class="account-box"><strong>{tr("Google conectado")}</strong><br><span class="data-meta">{correo}</span></div>',
+            unsafe_allow_html=True,
+        )
         if st.button(tr("Desconectar cuenta"), type="secondary"):
             try:
                 servicio.desconectar()
             except GoogleServiceError as exc:
-                st.error(str(exc))
-                return
+                if mostrar_error:
+                    st.error(tr(str(exc)))
+                return False
+            st.session_state.pop("google_requiere_reconexion", None)
             st.rerun()
-        return
+        return True
 
+    error_sesion = servicio.error_autenticacion
     try:
         auth_uri = servicio.iniciar_autenticacion()
-        st.link_button(tr("Conectar mi cuenta de Google"), auth_uri, type="primary")
     except GoogleServiceError as exc:
-        st.error(f"{tr('No se pudo preparar el acceso')}: {tr(str(exc))}")
+        if mostrar_error:
+            st.error(f"{tr('No se pudo preparar el acceso')}: {tr(str(exc))}")
+    else:
+        if error_sesion and mostrar_error:
+            st.error(tr(str(error_sesion)))
+        texto = "Reconectar mi cuenta de Google" if error_sesion else "Conectar mi cuenta de Google"
+        st.link_button(tr(texto), auth_uri, type="primary")
     st.caption(tr("Solo se solicitará gmail.readonly y calendar.readonly."))
+    return False
 
 
 def formatear_fecha(valor: str) -> str:
@@ -920,13 +987,11 @@ def formatear_fecha(valor: str) -> str:
         return valor
 
 
-def vista_correo() -> None:
+def vista_correo(servicio: GoogleWorkspaceService | None, mostrar_error: bool = True) -> None:
     """Busca y presenta mensajes reales de Gmail."""
 
     st.markdown(f"## {tr('Correo Gmail')}")
-    servicio = obtener_servicio_google()
-    bloque_conexion(servicio)
-    if not servicio or not servicio.conectado:
+    if not bloque_conexion(servicio, mostrar_error) or servicio is None:
         return
     busqueda = st.text_input(
         tr("Buscar en Gmail"),
@@ -949,17 +1014,17 @@ def vista_correo() -> None:
                 f"{escape(formatear_fecha(str(mensaje.get('received', ''))))}</div></div>",
                 unsafe_allow_html=True,
             )
+    except GoogleAuthenticationError:
+        gestionar_error_autenticacion(servicio)
     except GoogleServiceError as exc:
-        st.error(str(exc))
+        st.error(tr(str(exc)))
 
 
-def vista_calendario() -> None:
+def vista_calendario(servicio: GoogleWorkspaceService | None, mostrar_error: bool = True) -> None:
     """Consulta y presenta próximos eventos reales de Google Calendar."""
 
     st.markdown(f"## {tr('Calendario')}")
-    servicio = obtener_servicio_google()
-    bloque_conexion(servicio)
-    if not servicio or not servicio.conectado:
+    if not bloque_conexion(servicio, mostrar_error) or servicio is None:
         return
     try:
         with st.spinner(tr("Consultando el calendario…")):
@@ -978,8 +1043,10 @@ def vista_calendario() -> None:
                 f" · {escape(str(ubicacion))}</div></div>",
                 unsafe_allow_html=True,
             )
+    except GoogleAuthenticationError:
+        gestionar_error_autenticacion(servicio)
     except GoogleServiceError as exc:
-        st.error(str(exc))
+        st.error(tr(str(exc)))
 
 
 def vista_documentos() -> None:
@@ -1301,12 +1368,11 @@ def vista_actividades() -> None:
 
 VISTAS: dict[str, Callable[[], None]] = {
     "Asistente": vista_asistente,
-    "Correo Gmail": vista_correo,
-    "Calendario": vista_calendario,
     "Documentos académicos": vista_documentos,
     "Tareas y actividades": vista_actividades,
 }
 
+VISTAS_GOOGLE = {"Correo Gmail": vista_correo, "Calendario": vista_calendario}
 
 def barra_lateral() -> tuple[str, str]:
     """Construye la navegación y devuelve el nombre y la sección elegida."""
@@ -1356,13 +1422,12 @@ def barra_lateral() -> tuple[str, str]:
 def inicio(nombre: str, conectado: bool = False) -> None:
     """Muestra el saludo, la fecha y los indicadores generales."""
 
-    st.markdown(
+    st.html(
         f"""<section class="hero"><div class="eyebrow">MOONA · {tr('Sistema de asistencia personal')}</div>
         <h1>{saludo_segun_hora()}, {escape(nombre)}.</h1>
         <p>{fecha_localizada()}</p>
         <div class="status-row"><span class="status-pill"><span class="status-dot"></span>{tr('Interfaz activa')}</span>
         <span class="status-pill">{tr('Google conectado') if conectado else tr('Modo local')}</span></div></section>""",
-        unsafe_allow_html=True,
     )
 
 
@@ -1385,6 +1450,7 @@ def main() -> None:
             if servicio is None:
                 raise GoogleServiceError("No se encontró `.streamlit/credentials.json`.")
             servicio.completar_autenticacion(respuesta)
+            st.session_state.pop("google_requiere_reconexion", None)
             st.session_state["oauth_resultado"] = ("success", "Cuenta de Google conectada correctamente.")
         except GoogleServiceError as exc:
             st.session_state["oauth_resultado"] = ("error", str(exc))
@@ -1400,6 +1466,14 @@ def main() -> None:
 
     nombre, seleccion = barra_lateral()
     inicio(nombre, bool(servicio and servicio.conectado))
+    mostrar_error = not resultado_oauth or resultado_oauth[0] != "error"
+    if seleccion in VISTAS_GOOGLE:
+        VISTAS_GOOGLE[seleccion](servicio, mostrar_error)
+        return
+    if servicio and servicio.error_autenticacion:
+        bloque_conexion(servicio, mostrar_error)
+    if seleccion == "Asistente":
+        renderizar_social_hub(idioma_actual())
     VISTAS[seleccion]()
 
 
